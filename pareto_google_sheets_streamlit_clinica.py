@@ -74,7 +74,7 @@ def criar_figura_pareto(counter, titulo):
     return fig
 
 # =====================
-# URL FIXA DA PLANILHA (ALTERE AQUI)
+# URL FIXA DA PLANILHA
 # =====================
 
 URL_GOOGLE_SHEETS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSKwCflZovzD_0UAlLsDplKqWz2-WKs3agK-HaDQFmT6jx9RkkUAXNbUJvsD622uqUWTpXUTQ8XgILV/pub?output=csv"
@@ -90,12 +90,19 @@ if df is not None:
 
     perguntas = df.columns[1:8]
 
-    for i, coluna in enumerate(perguntas, start=1):
-        contador = contar_respostas_multipla(df, coluna)
-        fig = criar_figura_pareto(contador, f"{i}) {coluna}")
+    # Layout com 2 colunas
+    for i in range(0, len(perguntas), 2):
+        cols = st.columns(2)
 
-        st.markdown(f"### {i}) {coluna}")
-        st.pyplot(fig)
-        st.markdown("---")
+        for j in range(2):
+            if i + j < len(perguntas):
+                coluna = perguntas[i + j]
+                contador = contar_respostas_multipla(df, coluna)
+                fig = criar_figura_pareto(contador, f"{i + j + 1}) {coluna}")
+
+                with cols[j]:
+                    st.markdown(f"### {i + j + 1}) {coluna}")
+                    st.pyplot(fig)
+
 else:
     st.error("❌ Não foi possível carregar os dados da planilha.")
