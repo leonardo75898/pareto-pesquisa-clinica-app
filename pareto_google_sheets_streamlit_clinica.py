@@ -1,5 +1,5 @@
 # app.py
-import json, re
+import re
 from collections import Counter
 
 import numpy as np
@@ -20,41 +20,16 @@ st.markdown("""
 <style>
 .block-container { padding-top: 1rem; padding-bottom: 2rem; }
 [data-testid="column"] { padding: 0.25rem; }
-.stMarkdown img { width: 100% !important; }
-button.btn-sm {
-  padding:.45rem .8rem; border:0; border-radius:.55rem; background:#0e1117; color:#fff; cursor:pointer;
-}
-button.btn-ghost {
-  padding:.45rem .8rem; border:1px solid #ddd; border-radius:.55rem; background:#fff; color:#111; cursor:pointer;
-}
-.modal-backdrop {
-  display:none; position:fixed; inset:0; background:rgba(0,0,0,.7); z-index:9999; align-items:center; justify-content:center;
-}
-.modal-card {
-  background:#fff; padding:12px; border-radius:12px; width: min(96vw, 1200px);
-  box-shadow: 0 10px 30px rgba(0,0,0,.25);
-}
-.modal-head {
-  display:flex; justify-content:space-between; align-items:center; gap:1rem; margin-bottom:.5rem;
-}
-.modal-head h3 { margin:0; font: 600 18px/1.3 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
 </style>
 """, unsafe_allow_html=True)
 
 # =====================
 # FUNÇÕES AUXILIARES
 # =====================
-def slugify(texto: str) -> str:
-    s = re.sub(r"\s+", "_", texto.strip())
-    s = re.sub(r"[^\w\-_.()]+", "", s, flags=re.UNICODE)
-    return s.lower()
-
 def remove_prefixo_numerico(txt: str) -> str:
-    # remove "1) " / "2) " etc. no início, se existir
     return re.sub(r'^\s*\d+\)\s*', '', str(txt).strip())
 
 def wrap_label(txt: str, largura: int = 18) -> str:
-    # quebra inteligente com <br> para não cortar no gráfico
     palavras = str(txt).split()
     linhas, linha = [], ""
     for p in palavras:
@@ -89,16 +64,9 @@ def contar_respostas_multipla(df: pd.DataFrame, coluna: str) -> Counter:
         todas_respostas.extend(opcoes)
     return Counter(todas_respostas)
 
-def criar_figura_pareto_plotly(counter: Counter, titulo: str):
-    """Figura com ótima legibilidade:
-       - template claro,
-       - barras azuis e linha acumulada grafite,
-       - rótulos do X quebrados com <br>,
-       - margens amplas p/ rótulos e título,
-       - título rebaixado para não colidir com a modebar.
-    """
+def criar_figura_pareto(counter: Counter, titulo: str):
     fig = make_subplots(specs=[[{"secondary_y": True}]])
-    fig.update_layout(template="plotly_white")  # fundo claro
+    fig.update_layout(template="plotly_white")
 
     if not counter:
         fig.add_annotation(text="Sem dados para exibir", x=0.5, y=0.5, showarrow=False)
@@ -107,24 +75,20 @@ def criar_figura_pareto_plotly(counter: Counter, titulo: str):
 
     labels, valores = zip(*counter.most_common())
     totais = np.array(valores, dtype=float)
-    acumulado = np.cumsum(totais)
-    p_acum = 100 * acumulado / acumulado[-1]
+    p_acum = 100 * np.cumsum(totais) / totais.sum()
 
-    # Quebra rótulos longos com <br>
     labels_wrapped = [wrap_label(l, 18) for l in labels]
 
-    # Barras
     fig.add_trace(
         go.Bar(
-            x=list(labels),  # categorias originais
+            x=list(labels),
             y=list(totais),
             name="Frequência",
-            marker=dict(color="rgba(59,130,246,0.85)"),  # azul
-            hovertemplate="%{x}<br>Frequência: %{y}<extra></extra>"
+            marker=dict(color="rgba(59,130,246,0.85)"),
+            hovertemplate="%{x}<br>Frequência: %{y}<extra></extra>",
         ),
-        secondary_y=False
+        secondary_y=False,
     )
-    # Linha % acumulado
     fig.add_trace(
         go.Scatter(
             x=list(labels),
@@ -132,100 +96,51 @@ def criar_figura_pareto_plotly(counter: Counter, titulo: str):
             mode="lines+markers",
             name="% Acumulado",
             line=dict(color="rgba(17,24,39,1)", width=2),
-            hovertemplate="% Acumulado: %{y:.1f}%<extra></extra>"
+            hovertemplate="% Acumulado: %{y:.1f}%<extra></extra>",
         ),
-        secondary_y=True
+        secondary_y=True,
     )
-    # Linha 80/20
     fig.add_hline(y=80, line_dash="dash", line_color="gray", secondary_y=True)
 
-    # Eixos
     fig.update_yaxes(title_text="Frequência", secondary_y=False, automargin=True)
     fig.update_yaxes(title_text="% Acumulado", range=[0,110], secondary_y=True, automargin=True)
     fig.update_xaxes(
-        tickmode="array",
-        tickvals=list(labels),
-        ticktext=labels_wrapped,   # rótulos quebrados
-        tickangle=0,
-        automargin=True,
-        ticklabelstandoff=10
+        tickmode="array", tickvals=list(labels), ticktext=labels_wrapped,
+        automargin=True, ticklabelstandoff=10
     )
 
-    # Título interno (único)
+    # Título único (dentro do gráfico), longe da modebar
     fig.update_layout(
         title={"text": titulo, "x": 0.5, "y": 0.92, "xanchor": "center", "yanchor": "top"},
         margin=dict(l=70, r=40, t=120, b=120),
         height=440,
         legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="right", x=1),
-        bargap=0.25
+        bargap=0.25,
     )
     return fig
 
-def render_plotly_with_modal(fig, titulo: str, filename: str, key: str, height: int = 440):
-    """Gráfico + modal e download (client-side) — sem Kaleido."""
-    fig_dict = fig.to_dict()
-    html = f"""
-<div id="wrap-{key}">
-  <div id="chart-{key}" style="width:100%;height:{height}px;"></div>
-  <div style="display:flex;gap:.5rem;margin:.4rem 0;">
-    <button class="btn-sm" onclick="open_{key}()">Ampliar</button>
-    <button class="btn-ghost" onclick="download_{key}(false)">Baixar PNG (2K)</button>
-  </div>
-</div>
+def plot_card(fig, titulo: str, key: str):
+    # Barra do Plotly configurada para exportar em 1920x1080 via ícone de câmera
+    config = {
+        "displayModeBar": True,
+        "scrollZoom": True,
+        "responsive": True,
+        "toImageButtonOptions": {"format": "png", "filename": titulo, "height": 1080, "width": 1920, "scale": 1},
+    }
 
-<div id="modal-{key}" class="modal-backdrop">
-  <div class="modal-card">
-    <div class="modal-head">
-      <h3>{titulo}</h3>
-      <div style="display:flex;gap:.5rem;">
-        <button class="btn-ghost" onclick="download_{key}(true)">Baixar PNG (2K)</button>
-        <button class="btn-sm" onclick="close_{key}()">Fechar</button>
-      </div>
-    </div>
-    <div id="chart-big-{key}" style="width:100%; height:72vh;"></div>
-  </div>
-</div>
+    st.plotly_chart(fig, use_container_width=True, config=config)
 
-<script>
-(function(){{
-  function ensurePlotly(cb){{
-    if (window.Plotly) return cb();
-    var s = document.createElement('script');
-    s.src = 'https://cdn.plot.ly/plotly-2.30.0.min.js';
-    s.onload = cb;
-    document.head.appendChild(s);
-  }}
-  const fig = {json.dumps(fig_dict)};
-  const filename = {json.dumps(filename)};
-  const conf = {{displayModeBar:true, responsive:true, scrollZoom:true}};
+    c1, _ = st.columns([1, 3])
+    with c1:
+        if st.button("Ampliar", key=f"amp_{key}"):
+            st.session_state[f"show_{key}"] = True
 
-  function render(){{
-    const gd = document.getElementById("chart-{key}");
-    Plotly.newPlot(gd, fig.data, fig.layout, conf);
-    window.addEventListener("resize", ()=>Plotly.Plots.resize(gd));
-  }}
-  window.open_{key} = function(){{
-    const m = document.getElementById("modal-{key}");
-    m.style.display = "flex";
-    const gdb = document.getElementById("chart-big-{key}");
-    const layoutBig = JSON.parse(JSON.stringify(fig.layout || {{}}));
-    layoutBig.height = Math.round(window.innerHeight*0.72);
-    Plotly.newPlot(gdb, fig.data, layoutBig, conf);
-    window.addEventListener("resize", ()=>Plotly.Plots.resize(gdb));
-  }};
-  window.close_{key} = function(){{
-    document.getElementById("modal-{key}").style.display = "none";
-  }};
-  window.download_{key} = function(big){{
-    const id = big ? "chart-big-{key}" : "chart-{key}";
-    const gd = document.getElementById(id);
-    Plotly.downloadImage(gd, {{format:"png", filename: filename, width:1920, height:1080, scale:1}});
-  }};
-  ensurePlotly(render);
-}})();
-</script>
-"""
-    st.components.v1.html(html, height=height+90)
+    if st.session_state.get(f"show_{key}", False):
+        with st.modal(titulo, key=f"modal_{key}"):
+            st.plotly_chart(fig, use_container_width=True, config=config)
+            st.caption("Use o ícone de câmera (na barra do gráfico) para baixar em PNG 2K.")
+            if st.button("Fechar", key=f"fechar_{key}"):
+                st.session_state[f"show_{key}"] = False
 
 # =====================
 # URL DA PLANILHA
@@ -247,22 +162,11 @@ if df is not None:
         cols = st.columns(2)
         for j in range(2):
             if i + j < len(perguntas):
-                coluna_raw = perguntas[i + j]
-                # Evita título "1) 1) ..." caso a planilha já traga a numeração
-                coluna_limpa = remove_prefixo_numerico(coluna_raw)
-                titulo = f"{i + j + 1}) {coluna_limpa}"
-
-                contador = contar_respostas_multipla(df, coluna_raw)
-                fig = criar_figura_pareto_plotly(counter=contador, titulo=titulo)
-
+                col_raw = perguntas[i + j]
+                titulo = f"{i + j + 1}) {remove_prefixo_numerico(col_raw)}"
+                contador = contar_respostas_multipla(df, col_raw)
+                fig = criar_figura_pareto(counter=contador, titulo=titulo)
                 with cols[j]:
-                    # IMPORTANTE: não imprimir markdown com título aqui
-                    render_plotly_with_modal(
-                        fig=fig,
-                        titulo=titulo,
-                        filename=slugify(titulo),
-                        key=f"g{i}_{j}",
-                        height=440
-                    )
+                    plot_card(fig, titulo, key=f"{i}_{j}")
 else:
     st.error("❌ Não foi possível carregar os dados da planilha.")
