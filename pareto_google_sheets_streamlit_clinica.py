@@ -24,6 +24,19 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =====================
+# AJUSTES GERAIS
+# =====================
+HAS_MODAL = hasattr(st, "modal")  # fallback se a versão do Streamlit não tiver st.modal
+
+CONFIG_IMG = {
+    "displayModeBar": True,
+    "scrollZoom": True,
+    "responsive": True,
+    # Ícone de câmera exporta em 2560x1440 (título grande e nítido)
+    "toImageButtonOptions": {"format": "png", "filename": "grafico", "height": 1440, "width": 2560, "scale": 1},
+}
+
+# =====================
 # FUNÇÕES AUXILIARES
 # =====================
 def remove_prefixo_numerico(txt: str) -> str:
@@ -64,13 +77,14 @@ def contar_respostas_multipla(df: pd.DataFrame, coluna: str) -> Counter:
         todas_respostas.extend(opcoes)
     return Counter(todas_respostas)
 
-def criar_figura_pareto(counter: Counter, titulo: str):
+def criar_figura_pareto(counter: Counter, titulo: str,
+                        *, title_size=34, axis_size=16, tick_size=13, legend_size=14, height=500):
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     fig.update_layout(template="plotly_white")
 
     if not counter:
         fig.add_annotation(text="Sem dados para exibir", x=0.5, y=0.5, showarrow=False)
-        fig.update_layout(margin=dict(l=70, r=40, t=120, b=120), height=440)
+        fig.update_layout(margin=dict(l=70, r=40, t=140, b=140), height=height)
         return fig
 
     labels, valores = zip(*counter.most_common())
@@ -84,7 +98,7 @@ def criar_figura_pareto(counter: Counter, titulo: str):
             x=list(labels),
             y=list(totais),
             name="Frequência",
-            marker=dict(color="rgba(59,130,246,0.85)"),
+            marker=dict(color="rgba(59,130,246,0.85)"),  # azul suave
             hovertemplate="%{x}<br>Frequência: %{y}<extra></extra>",
         ),
         secondary_y=False,
@@ -95,40 +109,51 @@ def criar_figura_pareto(counter: Counter, titulo: str):
             y=list(p_acum),
             mode="lines+markers",
             name="% Acumulado",
-            line=dict(color="rgba(17,24,39,1)", width=2),
+            line=dict(color="rgba(17,24,39,1)", width=2),  # grafite
             hovertemplate="% Acumulado: %{y:.1f}%<extra></extra>",
         ),
         secondary_y=True,
     )
     fig.add_hline(y=80, line_dash="dash", line_color="gray", secondary_y=True)
 
-    fig.update_yaxes(title_text="Frequência", secondary_y=False, automargin=True)
-    fig.update_yaxes(title_text="% Acumulado", range=[0,110], secondary_y=True, automargin=True)
     fig.update_xaxes(
         tickmode="array", tickvals=list(labels), ticktext=labels_wrapped,
-        automargin=True, ticklabelstandoff=10
+        automargin=True, ticklabelstandoff=10, tickfont=dict(size=tick_size)
     )
+    fig.update_yaxes(title_text="Frequência", secondary_y=False,
+                     automargin=True, title_font=dict(size=axis_size), tickfont=dict(size=tick_size))
+    fig.update_yaxes(title_text="% Acumulado", range=[0,110], secondary_y=True,
+                     automargin=True, title_font=dict(size=axis_size), tickfont=dict(size=tick_size))
 
-    # Título único (dentro do gráfico), longe da modebar
+    # Título único (dentro do gráfico), longe da modebar e com fonte grande
     fig.update_layout(
-        title={"text": titulo, "x": 0.5, "y": 0.92, "xanchor": "center", "yanchor": "top"},
-        margin=dict(l=70, r=40, t=120, b=120),
-        height=440,
-        legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="right", x=1),
+        title={"text": titulo, "x": 0.5, "y": 0.92, "xanchor": "center", "yanchor": "top",
+               "font": {"size": title_size}},
+        margin=dict(l=70, r=40, t=140, b=140),
+        height=height,
+        legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="right", x=1,
+                    font=dict(size=legend_size)),
         bargap=0.25,
+        font=dict(size=tick_size)
     )
     return fig
 
-def plot_card(fig, titulo: str, key: str):
-    # Barra do Plotly configurada para exportar em 1920x1080 via ícone de câmera
-    config = {
-        "displayModeBar": True,
-        "scrollZoom": True,
-        "responsive": True,
-        "toImageButtonOptions": {"format": "png", "filename": titulo, "height": 1080, "width": 1920, "scale": 1},
-    }
+def abrir_ampliacao(fig, titulo: str, key: str):
+    if HAS_MODAL:
+        with st.modal(titulo, key=f"modal_{key}"):
+            st.plotly_chart(fig, use_container_width=True, config=CONFIG_IMG)
+            st.caption("Use o ícone de câmera (na barra do gráfico) para baixar em PNG 2560×1440.")
+            st.button("Fechar", key=f"fechar_{key}")
+    else:
+        # Fallback para versões sem st.modal
+        with st.expander(f"Visualização ampliada — {titulo}", expanded=True):
+            st.plotly_chart(fig, use_container_width=True, config=CONFIG_IMG)
+            st.caption("Use o ícone de câmera (na barra do gráfico) para baixar em PNG 2560×1440.")
+            if st.button("Fechar", key=f"fechar_{key}"):
+                st.session_state[f"exp_{key}"] = False
 
-    st.plotly_chart(fig, use_container_width=True, config=config)
+def plot_card(fig, titulo: str, key: str):
+    st.plotly_chart(fig, use_container_width=True, config=CONFIG_IMG)
 
     c1, _ = st.columns([1, 3])
     with c1:
@@ -136,11 +161,9 @@ def plot_card(fig, titulo: str, key: str):
             st.session_state[f"show_{key}"] = True
 
     if st.session_state.get(f"show_{key}", False):
-        with st.modal(titulo, key=f"modal_{key}"):
-            st.plotly_chart(fig, use_container_width=True, config=config)
-            st.caption("Use o ícone de câmera (na barra do gráfico) para baixar em PNG 2K.")
-            if st.button("Fechar", key=f"fechar_{key}"):
-                st.session_state[f"show_{key}"] = False
+        abrir_ampliacao(fig, titulo, key)
+        # Para fechar ao clicar no X do modal, basta redefinir no próximo rerender
+        st.session_state[f"show_{key}"] = False
 
 # =====================
 # URL DA PLANILHA
@@ -165,7 +188,8 @@ if df is not None:
                 col_raw = perguntas[i + j]
                 titulo = f"{i + j + 1}) {remove_prefixo_numerico(col_raw)}"
                 contador = contar_respostas_multipla(df, col_raw)
-                fig = criar_figura_pareto(counter=contador, titulo=titulo)
+                fig = criar_figura_pareto(counter=contador, titulo=titulo,
+                                          title_size=34, axis_size=16, tick_size=13, legend_size=14, height=520)
                 with cols[j]:
                     plot_card(fig, titulo, key=f"{i}_{j}")
 else:
