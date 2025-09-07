@@ -50,8 +50,21 @@ def slugify(texto: str) -> str:
     return s.lower()
 
 def remove_prefixo_numerico(txt: str) -> str:
-    # Remove "1) ", "2) " etc. do começo do rótulo, se existir
-    return re.sub(r'^\s*\d+\)\s*', '', txt.strip())
+    # remove "1) " / "2) " etc. no início, se existir
+    return re.sub(r'^\s*\d+\)\s*', '', str(txt).strip())
+
+def wrap_label(txt: str, largura: int = 18) -> str:
+    # quebra inteligente com <br> para não cortar no gráfico
+    palavras = str(txt).split()
+    linhas, linha = [], ""
+    for p in palavras:
+        if len(linha) + len(p) + (1 if linha else 0) <= largura:
+            linha = (linha + " " + p).strip()
+        else:
+            if linha: linhas.append(linha)
+            linha = p
+    if linha: linhas.append(linha)
+    return "<br>".join(linhas)
 
 def carregar_planilha_google_sheets(url: str):
     try:
@@ -77,18 +90,19 @@ def contar_respostas_multipla(df: pd.DataFrame, coluna: str) -> Counter:
     return Counter(todas_respostas)
 
 def criar_figura_pareto_plotly(counter: Counter, titulo: str):
-    """Cria figura com melhor legibilidade:
-       - template claro
-       - barras azuis, linha acumulada escura
-       - margens amplas p/ rótulos e título
-       - título rebaixado para não colidir com a modebar
+    """Figura com ótima legibilidade:
+       - template claro,
+       - barras azuis e linha acumulada grafite,
+       - rótulos do X quebrados com <br>,
+       - margens amplas p/ rótulos e título,
+       - título rebaixado para não colidir com a modebar.
     """
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     fig.update_layout(template="plotly_white")  # fundo claro
 
     if not counter:
         fig.add_annotation(text="Sem dados para exibir", x=0.5, y=0.5, showarrow=False)
-        fig.update_layout(margin=dict(l=70, r=40, t=110, b=110), height=420)
+        fig.update_layout(margin=dict(l=70, r=40, t=120, b=120), height=440)
         return fig
 
     labels, valores = zip(*counter.most_common())
@@ -96,13 +110,17 @@ def criar_figura_pareto_plotly(counter: Counter, titulo: str):
     acumulado = np.cumsum(totais)
     p_acum = 100 * acumulado / acumulado[-1]
 
+    # Quebra rótulos longos com <br>
+    labels_wrapped = [wrap_label(l, 18) for l in labels]
+
     # Barras
     fig.add_trace(
         go.Bar(
-            x=list(labels),
+            x=list(labels),  # categorias originais
             y=list(totais),
             name="Frequência",
-            marker=dict(color="rgba(59,130,246,0.85)")  # azul
+            marker=dict(color="rgba(59,130,246,0.85)"),  # azul
+            hovertemplate="%{x}<br>Frequência: %{y}<extra></extra>"
         ),
         secondary_y=False
     )
@@ -113,34 +131,38 @@ def criar_figura_pareto_plotly(counter: Counter, titulo: str):
             y=list(p_acum),
             mode="lines+markers",
             name="% Acumulado",
-            line=dict(color="rgba(17,24,39,1)", width=2)
+            line=dict(color="rgba(17,24,39,1)", width=2),
+            hovertemplate="% Acumulado: %{y:.1f}%<extra></extra>"
         ),
         secondary_y=True
     )
     # Linha 80/20
     fig.add_hline(y=80, line_dash="dash", line_color="gray", secondary_y=True)
 
-    # Eixos e rótulos do X
+    # Eixos
     fig.update_yaxes(title_text="Frequência", secondary_y=False, automargin=True)
     fig.update_yaxes(title_text="% Acumulado", range=[0,110], secondary_y=True, automargin=True)
     fig.update_xaxes(
-        tickangle=-30,
+        tickmode="array",
+        tickvals=list(labels),
+        ticktext=labels_wrapped,   # rótulos quebrados
+        tickangle=0,
         automargin=True,
         ticklabelstandoff=10
     )
 
-    # Título no alto, mas abaixo da barra de ferramentas
+    # Título interno (único)
     fig.update_layout(
         title={"text": titulo, "x": 0.5, "y": 0.92, "xanchor": "center", "yanchor": "top"},
-        margin=dict(l=70, r=40, t=110, b=110),
-        height=420,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=70, r=40, t=120, b=120),
+        height=440,
+        legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="right", x=1),
         bargap=0.25
     )
     return fig
 
-def render_plotly_with_modal(fig, titulo: str, filename: str, key: str, height: int = 420):
-    """Renderiza o gráfico + modal e download (client-side) — sem Kaleido."""
+def render_plotly_with_modal(fig, titulo: str, filename: str, key: str, height: int = 440):
+    """Gráfico + modal e download (client-side) — sem Kaleido."""
     fig_dict = fig.to_dict()
     html = f"""
 <div id="wrap-{key}">
@@ -173,7 +195,6 @@ def render_plotly_with_modal(fig, titulo: str, filename: str, key: str, height: 
     s.onload = cb;
     document.head.appendChild(s);
   }}
-
   const fig = {json.dumps(fig_dict)};
   const filename = {json.dumps(filename)};
   const conf = {{displayModeBar:true, responsive:true, scrollZoom:true}};
@@ -183,7 +204,6 @@ def render_plotly_with_modal(fig, titulo: str, filename: str, key: str, height: 
     Plotly.newPlot(gd, fig.data, fig.layout, conf);
     window.addEventListener("resize", ()=>Plotly.Plots.resize(gd));
   }}
-
   window.open_{key} = function(){{
     const m = document.getElementById("modal-{key}");
     m.style.display = "flex";
@@ -193,23 +213,14 @@ def render_plotly_with_modal(fig, titulo: str, filename: str, key: str, height: 
     Plotly.newPlot(gdb, fig.data, layoutBig, conf);
     window.addEventListener("resize", ()=>Plotly.Plots.resize(gdb));
   }};
-
   window.close_{key} = function(){{
     document.getElementById("modal-{key}").style.display = "none";
   }};
-
   window.download_{key} = function(big){{
     const id = big ? "chart-big-{key}" : "chart-{key}";
     const gd = document.getElementById(id);
-    Plotly.downloadImage(gd, {{
-      format: "png",
-      filename: filename,
-      width: 1920,
-      height: 1080,
-      scale: 1
-    }});
+    Plotly.downloadImage(gd, {{format:"png", filename: filename, width:1920, height:1080, scale:1}});
   }};
-
   ensurePlotly(render);
 }})();
 </script>
@@ -237,20 +248,21 @@ if df is not None:
         for j in range(2):
             if i + j < len(perguntas):
                 coluna_raw = perguntas[i + j]
-                # (4) evita "1) 1) ..." no título
-                coluna_limpa = remove_prefixo_numerico(str(coluna_raw))
+                # Evita título "1) 1) ..." caso a planilha já traga a numeração
+                coluna_limpa = remove_prefixo_numerico(coluna_raw)
                 titulo = f"{i + j + 1}) {coluna_limpa}"
 
                 contador = contar_respostas_multipla(df, coluna_raw)
                 fig = criar_figura_pareto_plotly(counter=contador, titulo=titulo)
 
                 with cols[j]:
+                    # IMPORTANTE: não imprimir markdown com título aqui
                     render_plotly_with_modal(
                         fig=fig,
                         titulo=titulo,
                         filename=slugify(titulo),
                         key=f"g{i}_{j}",
-                        height=420
+                        height=440
                     )
 else:
     st.error("❌ Não foi possível carregar os dados da planilha.")
