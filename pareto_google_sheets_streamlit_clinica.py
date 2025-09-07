@@ -1,7 +1,6 @@
 # app.py
-import io
+import json
 import re
-import zipfile
 from collections import Counter
 
 import numpy as np
@@ -9,7 +8,6 @@ import pandas as pd
 import streamlit as st
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
-import importlib.util
 
 # =====================
 # CONFIGURAÇÃO INICIAL
@@ -23,12 +21,54 @@ st.markdown("""
 <style>
 .block-container { padding-top: 1rem; padding-bottom: 2rem; }
 [data-testid="column"] { padding: 0.25rem; }
-.stPlotlyChart, .stImage, .stMarkdown img { width: 100% !important; }
+.stMarkdown img { width: 100% !important; }
+button.btn-sm {
+  padding:.45rem .8rem; border:0; border-radius:.55rem; background:#0e1117; color:#fff; cursor:pointer;
+}
+button.btn-ghost {
+  padding:.45rem .8rem; border:1px solid #ddd; border-radius:.55rem; background:#fff; color:#111; cursor:pointer;
+}
+.modal-backdrop {
+  display:none; position:fixed; inset:0; background:rgba(0,0,0,.7); z-index:9999; align-items:center; justify-content:center;
+}
+.modal-card {
+  background:#fff; padding:12px; border-radius:12px; width: min(96vw, 1200px);
+  box-shadow: 0 10px 30px rgba(0,0,0,.25);
+}
+.modal-head {
+  display:flex; justify-content:space-between; align-items:center; gap:1rem; margin-bottom:.5rem;
+}
+.modal-head h3 { margin:0; font: 600 18px/1.3 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
 </style>
 """, unsafe_allow_html=True)
 
-# Checagem do Kaleido (para exportar imagens)
-KALEIDO_OK = importlib.util.find_spec("kaleido") is not None
+# (opcional) botão para tentar paisagem em mobile
+st.components.v1.html("""
+<div style="margin:.5rem 0 1rem 0;">
+  <button id="landBtn" style="padding:.6rem 1rem;border:0;border-radius:.6rem;background:#0e1117;color:#fff;cursor:pointer;">
+    📱 Otimizar para celular (paisagem)
+  </button>
+  <span id="landMsg" style="margin-left:.5rem;color:#666;"></span>
+</div>
+<script>
+const btn = document.getElementById('landBtn');
+const msg = document.getElementById('landMsg');
+btn?.addEventListener('click', async () => {
+  try {
+    const el = document.documentElement;
+    if (el.requestFullscreen) await el.requestFullscreen();
+    if (screen.orientation && screen.orientation.lock) {
+      await screen.orientation.lock('landscape');
+      msg.textContent = 'Modo paisagem solicitado ✔️';
+    } else {
+      msg.textContent = 'Seu navegador não permite bloquear orientação.';
+    }
+  } catch(e) {
+    msg.textContent = 'Não foi possível ativar paisagem automaticamente.';
+  }
+});
+</script>
+""", height=80)
 
 # =====================
 # FUNÇÕES AUXILIARES
@@ -82,7 +122,7 @@ def criar_figura_pareto_plotly(counter: Counter, titulo: str):
     fig.update_yaxes(title_text="% Acumulado", range=[0,110], secondary_y=True)
     fig.update_xaxes(tickangle=45)
 
-    # TÍTULO “no alto”, como header
+    # TÍTULO no alto
     fig.update_layout(
         title={"text": titulo, "x": 0.5, "y": 0.98, "xanchor": "center", "yanchor": "top"},
         margin=dict(l=20, r=20, t=90, b=40),
@@ -91,46 +131,82 @@ def criar_figura_pareto_plotly(counter: Counter, titulo: str):
     )
     return fig
 
-def fig_to_bytes(fig, fmt="png", scale=2):
-    if not KALEIDO_OK:
-        return None
-    return fig.to_image(format=fmt, scale=scale, engine="kaleido")
+def render_plotly_with_modal(fig, titulo: str, filename: str, key: str, height: int = 380):
+    """Renderiza o gráfico Plotly + botões (Ampliar/Download) 100% no cliente, sem Kaleido."""
+    fig_dict = fig.to_dict()
+    html = f"""
+<div id="wrap-{key}">
+  <div id="chart-{key}" style="width:100%;height:{height}px;"></div>
+  <div style="display:flex;gap:.5rem;margin:.4rem 0;">
+    <button class="btn-sm" onclick="open_{key}()">Ampliar</button>
+    <button class="btn-ghost" onclick="download_{key}(false)">Baixar PNG (2K)</button>
+  </div>
+</div>
 
-def build_zip(images: list[tuple[str, bytes]]) -> bytes:
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for nome, data in images:
-            zf.writestr(nome, data)
-    buf.seek(0)
-    return buf.read()
+<div id="modal-{key}" class="modal-backdrop">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3>{titulo}</h3>
+      <div style="display:flex;gap:.5rem;">
+        <button class="btn-ghost" onclick="download_{key}(true)">Baixar PNG (2K)</button>
+        <button class="btn-sm" onclick="close_{key}()">Fechar</button>
+      </div>
+    </div>
+    <div id="chart-big-{key}" style="width:100%; height:72vh;"></div>
+  </div>
+</div>
 
-def build_pptx(pares: list[tuple[str, bytes]]):
-    """Gera PPTX com 1 slide por gráfico (título + imagem PNG)."""
-    from pptx import Presentation
-    from pptx.util import Inches, Pt
-    from pptx.enum.text import PP_ALIGN
+<script>
+(function(){{
+  function ensurePlotly(cb){{
+    if (window.Plotly) return cb();
+    var s = document.createElement('script');
+    s.src = 'https://cdn.plot.ly/plotly-2.30.0.min.js';
+    s.onload = cb;
+    document.head.appendChild(s);
+  }}
 
-    prs = Presentation()
-    # Layout título + conteúdo (geralmente index 1)
-    layout = prs.slide_layouts[1]
+  const fig = {json.dumps(fig_dict)};
+  const filename = {json.dumps(filename)};
+  const conf = {{displayModeBar:true, responsive:true, scrollZoom:true}};
 
-    for titulo, png_bytes in pares:
-        slide = prs.slides.add_slide(layout)
-        slide.shapes.title.text = titulo
+  function render(){{
+    const gd = document.getElementById("chart-{key}");
+    Plotly.newPlot(gd, fig.data, fig.layout, conf);
+    window.addEventListener("resize", ()=>Plotly.Plots.resize(gd));
+  }}
 
-        # Caixa de conteúdo (placeholder 1)
-        ph = slide.placeholders[1]
-        # Inserir figura dimensionando para largura do placeholder
-        pic = ph.insert_picture(io.BytesIO(png_bytes))
+  window.open_{key} = function(){{
+    const m = document.getElementById("modal-{key}");
+    m.style.display = "flex";
+    const gdb = document.getElementById("chart-big-{key}");
+    const layoutBig = JSON.parse(JSON.stringify(fig.layout || {{}}));
+    layoutBig.height = Math.round(window.innerHeight*0.72);
+    Plotly.newPlot(gdb, fig.data, layoutBig, conf);
+    window.addEventListener("resize", ()=>Plotly.Plots.resize(gdb));
+  }};
 
-        # Opcional: centralizar título
-        slide.shapes.title.text_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
-        slide.shapes.title.text_frame.paragraphs[0].font.size = Pt(28)
+  window.close_{key} = function(){{
+    document.getElementById("modal-{key}").style.display = "none";
+  }};
 
-    out = io.BytesIO()
-    prs.save(out)
-    out.seek(0)
-    return out.read()
+  window.download_{key} = function(big){{
+    const id = big ? "chart-big-{key}" : "chart-{key}";
+    const gd = document.getElementById(id);
+    Plotly.downloadImage(gd, {{
+      format: "png",
+      filename: filename,
+      width: 1920,
+      height: 1080,
+      scale: 1
+    }});
+  }};
+
+  ensurePlotly(render);
+}})();
+</script>
+"""
+    st.components.v1.html(html, height=height+90)
 
 # =====================
 # URL DA PLANILHA
@@ -148,26 +224,8 @@ if df is not None:
 
     perguntas = df.columns[1:8]
 
-    # Config da barra do Plotly (ícone câmera → 1920x1080)
-    plotly_config = {
-        "displayModeBar": True,
-        "scrollZoom": True,
-        "responsive": True,
-        "toImageButtonOptions": {
-            "format": "png",
-            "filename": "grafico",
-            "height": 1080,
-            "width": 1920,
-            "scale": 1
-        }
-    }
-
-    # Guardar figs e imagens para ZIP/PPTX
-    figs: list[tuple[str, go.Figure]] = []
-    pngs: list[tuple[str, bytes]] = []
-
     for i in range(0, len(perguntas), 2):
-        colunas = st.columns(2)
+        cols = st.columns(2)
         for j in range(2):
             if i + j < len(perguntas):
                 coluna = perguntas[i + j]
@@ -175,76 +233,13 @@ if df is not None:
                 contador = contar_respostas_multipla(df, coluna)
                 fig = criar_figura_pareto_plotly(contador, titulo)
 
-                with colunas[j]:
-                    st.plotly_chart(fig, use_container_width=True, config=plotly_config)
-
-                    fname_base = slugify(titulo)
-
-                    # Botões individuais
-                    c1, c2 = st.columns([1,1])
-                    with c1:
-                        if KALEIDO_OK:
-                            png_bytes = fig_to_bytes(fig, fmt="png", scale=2)
-                            st.download_button(
-                                "Baixar PNG (alta)",
-                                data=png_bytes,
-                                file_name=f"{fname_base}.png",
-                                mime="image/png",
-                                key=f"png_{i}_{j}",
-                            )
-                        else:
-                            st.info("Instale 'kaleido' para habilitar o download PNG/SVG.")
-                    with c2:
-                        if KALEIDO_OK:
-                            svg_bytes = fig_to_bytes(fig, fmt="svg", scale=1)
-                            st.download_button(
-                                "Baixar SVG (vetor)",
-                                data=svg_bytes,
-                                file_name=f"{fname_base}.svg",
-                                mime="image/svg+xml",
-                                key=f"svg_{i}_{j}",
-                            )
-
-                # Acumula para ZIP/PPTX
-                figs.append((titulo, fig))
-                if KALEIDO_OK:
-                    png_bytes = fig_to_bytes(fig, fmt="png", scale=2)
-                    if png_bytes:
-                        pngs.append((f"{slugify(titulo)}.png", png_bytes))
-
-    st.markdown("---")
-
-    # Ações globais (rodapé)
-    colA, colB = st.columns([1,1])
-
-    with colA:
-        if KALEIDO_OK and pngs:
-            zip_bytes = build_zip(pngs)
-            st.download_button(
-                "⬇️ Baixar TODOS (ZIP, PNG alta)",
-                data=zip_bytes,
-                file_name="graficos_pareto.zip",
-                mime="application/zip",
-                key="zip_all",
-            )
-        else:
-            st.caption("Para baixar todos: adicione 'kaleido' no requirements.txt.")
-
-    with colB:
-        if KALEIDO_OK and pngs:
-            try:
-                pptx_bytes = build_pptx([(name[:-4].replace("_", " "), data) for name, data in pngs])
-                st.download_button(
-                    "🖼️ Gerar PPTX (1 slide por gráfico)",
-                    data=pptx_bytes,
-                    file_name="graficos_pareto.pptx",
-                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                    key="pptx_all",
-                )
-            except Exception as e:
-                st.warning(f"Não foi possível gerar o PPTX: {e}")
-        else:
-            st.caption("Para gerar PPTX: adicione 'kaleido' e 'python-pptx' ao requirements.")
-
+                with cols[j]:
+                    render_plotly_with_modal(
+                        fig=fig,
+                        titulo=titulo,
+                        filename=slugify(titulo),
+                        key=f"g{i}_{j}",
+                        height=380
+                    )
 else:
     st.error("❌ Não foi possível carregar os dados da planilha.")
