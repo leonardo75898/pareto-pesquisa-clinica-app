@@ -1,6 +1,5 @@
 # app.py
-import json
-import re
+import json, re
 from collections import Counter
 
 import numpy as np
@@ -42,34 +41,6 @@ button.btn-ghost {
 </style>
 """, unsafe_allow_html=True)
 
-# (opcional) botão para tentar paisagem em mobile
-st.components.v1.html("""
-<div style="margin:.5rem 0 1rem 0;">
-  <button id="landBtn" style="padding:.6rem 1rem;border:0;border-radius:.6rem;background:#0e1117;color:#fff;cursor:pointer;">
-    📱 Otimizar para celular (paisagem)
-  </button>
-  <span id="landMsg" style="margin-left:.5rem;color:#666;"></span>
-</div>
-<script>
-const btn = document.getElementById('landBtn');
-const msg = document.getElementById('landMsg');
-btn?.addEventListener('click', async () => {
-  try {
-    const el = document.documentElement;
-    if (el.requestFullscreen) await el.requestFullscreen();
-    if (screen.orientation && screen.orientation.lock) {
-      await screen.orientation.lock('landscape');
-      msg.textContent = 'Modo paisagem solicitado ✔️';
-    } else {
-      msg.textContent = 'Seu navegador não permite bloquear orientação.';
-    }
-  } catch(e) {
-    msg.textContent = 'Não foi possível ativar paisagem automaticamente.';
-  }
-});
-</script>
-""", height=80)
-
 # =====================
 # FUNÇÕES AUXILIARES
 # =====================
@@ -77,6 +48,10 @@ def slugify(texto: str) -> str:
     s = re.sub(r"\s+", "_", texto.strip())
     s = re.sub(r"[^\w\-_.()]+", "", s, flags=re.UNICODE)
     return s.lower()
+
+def remove_prefixo_numerico(txt: str) -> str:
+    # Remove "1) ", "2) " etc. do começo do rótulo, se existir
+    return re.sub(r'^\s*\d+\)\s*', '', txt.strip())
 
 def carregar_planilha_google_sheets(url: str):
     try:
@@ -102,10 +77,18 @@ def contar_respostas_multipla(df: pd.DataFrame, coluna: str) -> Counter:
     return Counter(todas_respostas)
 
 def criar_figura_pareto_plotly(counter: Counter, titulo: str):
+    """Cria figura com melhor legibilidade:
+       - template claro
+       - barras azuis, linha acumulada escura
+       - margens amplas p/ rótulos e título
+       - título rebaixado para não colidir com a modebar
+    """
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.update_layout(template="plotly_white")  # fundo claro
+
     if not counter:
-        fig = make_subplots(specs=[[{"secondary_y": True}]])
         fig.add_annotation(text="Sem dados para exibir", x=0.5, y=0.5, showarrow=False)
-        fig.update_layout(margin=dict(l=20,r=20,t=80,b=20), height=360)
+        fig.update_layout(margin=dict(l=70, r=40, t=110, b=110), height=420)
         return fig
 
     labels, valores = zip(*counter.most_common())
@@ -113,26 +96,51 @@ def criar_figura_pareto_plotly(counter: Counter, titulo: str):
     acumulado = np.cumsum(totais)
     p_acum = 100 * acumulado / acumulado[-1]
 
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
-    fig.add_trace(go.Bar(x=list(labels), y=list(totais), name="Frequência"), secondary_y=False)
-    fig.add_trace(go.Scatter(x=list(labels), y=list(p_acum), mode="lines+markers", name="% Acumulado"), secondary_y=True)
+    # Barras
+    fig.add_trace(
+        go.Bar(
+            x=list(labels),
+            y=list(totais),
+            name="Frequência",
+            marker=dict(color="rgba(59,130,246,0.85)")  # azul
+        ),
+        secondary_y=False
+    )
+    # Linha % acumulado
+    fig.add_trace(
+        go.Scatter(
+            x=list(labels),
+            y=list(p_acum),
+            mode="lines+markers",
+            name="% Acumulado",
+            line=dict(color="rgba(17,24,39,1)", width=2)
+        ),
+        secondary_y=True
+    )
+    # Linha 80/20
     fig.add_hline(y=80, line_dash="dash", line_color="gray", secondary_y=True)
 
-    fig.update_yaxes(title_text="Frequência", secondary_y=False)
-    fig.update_yaxes(title_text="% Acumulado", range=[0,110], secondary_y=True)
-    fig.update_xaxes(tickangle=45)
+    # Eixos e rótulos do X
+    fig.update_yaxes(title_text="Frequência", secondary_y=False, automargin=True)
+    fig.update_yaxes(title_text="% Acumulado", range=[0,110], secondary_y=True, automargin=True)
+    fig.update_xaxes(
+        tickangle=-30,
+        automargin=True,
+        ticklabelstandoff=10
+    )
 
-    # TÍTULO no alto
+    # Título no alto, mas abaixo da barra de ferramentas
     fig.update_layout(
-        title={"text": titulo, "x": 0.5, "y": 0.98, "xanchor": "center", "yanchor": "top"},
-        margin=dict(l=20, r=20, t=90, b=40),
-        height=380,
+        title={"text": titulo, "x": 0.5, "y": 0.92, "xanchor": "center", "yanchor": "top"},
+        margin=dict(l=70, r=40, t=110, b=110),
+        height=420,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        bargap=0.25
     )
     return fig
 
-def render_plotly_with_modal(fig, titulo: str, filename: str, key: str, height: int = 380):
-    """Renderiza o gráfico Plotly + botões (Ampliar/Download) 100% no cliente, sem Kaleido."""
+def render_plotly_with_modal(fig, titulo: str, filename: str, key: str, height: int = 420):
+    """Renderiza o gráfico + modal e download (client-side) — sem Kaleido."""
     fig_dict = fig.to_dict()
     html = f"""
 <div id="wrap-{key}">
@@ -228,10 +236,13 @@ if df is not None:
         cols = st.columns(2)
         for j in range(2):
             if i + j < len(perguntas):
-                coluna = perguntas[i + j]
-                titulo = f"{i + j + 1}) {coluna}"
-                contador = contar_respostas_multipla(df, coluna)
-                fig = criar_figura_pareto_plotly(contador, titulo)
+                coluna_raw = perguntas[i + j]
+                # (4) evita "1) 1) ..." no título
+                coluna_limpa = remove_prefixo_numerico(str(coluna_raw))
+                titulo = f"{i + j + 1}) {coluna_limpa}"
+
+                contador = contar_respostas_multipla(df, coluna_raw)
+                fig = criar_figura_pareto_plotly(counter=contador, titulo=titulo)
 
                 with cols[j]:
                     render_plotly_with_modal(
@@ -239,7 +250,7 @@ if df is not None:
                         titulo=titulo,
                         filename=slugify(titulo),
                         key=f"g{i}_{j}",
-                        height=380
+                        height=420
                     )
 else:
     st.error("❌ Não foi possível carregar os dados da planilha.")
