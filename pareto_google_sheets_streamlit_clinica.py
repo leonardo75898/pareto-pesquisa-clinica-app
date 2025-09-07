@@ -117,11 +117,11 @@ def criar_figura_pareto_plotly(counter: Counter, titulo: str):
     fig.update_xaxes(tickangle=45)
 
     fig.update_layout(
-        title=titulo,
-        margin=dict(l=20, r=20, t=50, b=40),
+        margin=dict(l=20, r=20, t=20, b=40),
         height=380,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
+
     return fig
 
 # =====================
