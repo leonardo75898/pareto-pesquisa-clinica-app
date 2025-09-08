@@ -1,7 +1,9 @@
+# app.py
 import re
-import base64
-from io import BytesIO
+import io
+import zipfile
 from collections import Counter
+from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -12,15 +14,21 @@ import plotly.graph_objects as go
 # CONFIGURAÇÃO INICIAL
 # =====================
 st.set_page_config(layout="wide", page_title="Gráficos de Pareto")
-st.title("📊 Gráficos de Pareto")
-st.caption("Fonte: Respostas da planilha do Google Sheets (atualiza em tempo real)")
 
-st.markdown("""
-<style>
-.block-container { padding-top: 1rem; padding-bottom: 2rem; }
-[data-testid="column"] { padding: 0.25rem; }
-</style>
-""", unsafe_allow_html=True)
+st.markdown(
+    """
+    <style>
+    .block-container { padding-top: .8rem; padding-bottom: 2rem; }
+    [data-testid="column"] { padding: 0.25rem; }
+    .toolbar { display:flex; justify-content:flex-end; gap:.5rem; }
+    .tip { font-size:0.85rem; color:#4b5563; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.title("📊 Gráficos de Pareto")
+st.caption("Fonte: respostas de formulário no Google Sheets (atualiza em tempo real)")
 
 # =====================
 # FUNÇÕES AUXILIARES
@@ -28,16 +36,19 @@ st.markdown("""
 def remove_prefixo_numerico(txt: str) -> str:
     return re.sub(r'^\s*\d+\)\s*', '', str(txt).strip())
 
-def wrap_label(txt: str, largura: int = 22) -> str:
+def wrap_text(txt: str, largura: int) -> str:
+    """Quebra em <br> sem estourar; largura é em caracteres approx."""
     palavras = str(txt).split()
     linhas, linha = [], ""
     for p in palavras:
         if len(linha) + len(p) + (1 if linha else 0) <= largura:
             linha = (linha + " " + p).strip()
         else:
-            if linha: linhas.append(linha)
+            if linha:
+                linhas.append(linha)
             linha = p
-    if linha: linhas.append(linha)
+    if linha:
+        linhas.append(linha)
     return "<br>".join(linhas)
 
 def carregar_planilha_google_sheets(url: str):
@@ -66,9 +77,15 @@ def contar_respostas_multipla(df: pd.DataFrame, coluna: str) -> Counter:
 # =====================
 # FIGURA: PARETO HORIZONTAL
 # =====================
-def figura_pareto_horizontal(counter: Counter, titulo: str, ampliado: bool = False):
+def figura_pareto_horizontal(counter: Counter, titulo: str, largura_rotulo=24, ampliado=False) -> go.Figure:
+    """
+    Barras HORIZONTAIS (x=frequência), eixo x2 superior para % acumulado.
+    Título em faixa azul que “acompanha” a largura visual do gráfico.
+    Compatível com Plotly 5.0.0.
+    """
+    fig = go.Figure()
+
     if not counter:
-        fig = go.Figure()
         fig.add_annotation(text="Sem dados para exibir", x=0.5, y=0.5, showarrow=False)
         fig.update_layout(template="plotly_white", height=420,
                           margin=dict(l=140, r=80, t=200, b=80))
@@ -78,14 +95,12 @@ def figura_pareto_horizontal(counter: Counter, titulo: str, ampliado: bool = Fal
     totais = np.array(valores, dtype=float)
     p_acum = 100 * np.cumsum(totais) / totais.sum()
 
-    labels_wrapped = [wrap_label(l, 22) for l in labels]
+    labels_wrapped = [wrap_text(l, largura_rotulo) for l in labels]
 
-    base_h = 46 * len(labels) + 260
-    height = max(420, base_h)
+    base_h = 48 * len(labels) + 260
+    height = max(480, base_h)
     if ampliado:
-        height = int(height * 1.35)
-
-    fig = go.Figure()
+        height = int(height * 1.25)
 
     # Barras horizontais
     fig.add_trace(go.Bar(
@@ -93,11 +108,11 @@ def figura_pareto_horizontal(counter: Counter, titulo: str, ampliado: bool = Fal
         x=list(totais),
         y=labels_wrapped,
         name="Frequência",
-        marker=dict(color="rgba(59,130,246,0.85)"),
+        marker=dict(color="rgba(59,130,246,0.88)"),
         hovertemplate="%{y}<br>Frequência: %{x}<extra></extra>"
     ))
 
-    # Linha de % acumulado
+    # Linha % acumulado (x2)
     fig.add_trace(go.Scatter(
         x=list(p_acum),
         y=labels_wrapped,
@@ -115,11 +130,12 @@ def figura_pareto_horizontal(counter: Counter, titulo: str, ampliado: bool = Fal
         zeroline=False,
         anchor="y",
         domain=[0, 1],
-        title_font=dict(size=18),
-        tickfont=dict(size=14)
+        title_font=dict(size=20),
+        tickfont=dict(size=16)
     )
 
-    # Eixo X2 (% acumulado)
+    # Eixo X2 (topo) % acumulado
+    # (em Plotly 5.0 é via update_layout(xaxis2=...))
     fig.update_layout(xaxis2=dict(
         title="% Acumulado",
         overlaying="x",
@@ -127,21 +143,21 @@ def figura_pareto_horizontal(counter: Counter, titulo: str, ampliado: bool = Fal
         range=[0, 110],
         tickmode="array",
         tickvals=[0, 20, 40, 60, 80, 100],
-        title_font=dict(size=18),
-        tickfont=dict(size=14)
+        titlefont=dict(size=20),   # sintaxe antiga compatível
+        tickfont=dict(size=16)
     ))
 
-    # Eixo Y
+    # Eixo Y (categorias)
     fig.update_yaxes(
         title_text="",
         automargin=True,
         categoryorder="array",
         categoryarray=labels_wrapped,
         autorange="reversed",
-        tickfont=dict(size=14)
+        tickfont=dict(size=16)
     )
 
-    # Linha de referência 80%
+    # Linha 80% (vertical no x2) – em 5.0 usamos shape
     fig.add_shape(
         type="line",
         xref="x2", yref="paper",
@@ -149,64 +165,78 @@ def figura_pareto_horizontal(counter: Counter, titulo: str, ampliado: bool = Fal
         line=dict(color="gray", width=2, dash="dash")
     )
 
-    # Estilo e título com fundo azul
+    # Título com faixa azul (que pode quebrar em 2+ linhas)
+    titulo_env = wrap_text(titulo, 70)
     fig.update_layout(
         template="plotly_white",
         title={
-            "text": f"<span style='background-color:#2563EB; color:white; padding:6px 16px; border-radius:6px'>{titulo}</span>",
-            "x": 0.5, "y": 0.92, "xanchor": "center", "yanchor": "top",
-            "font": {"size": 26 if not ampliado else 30}
+            "text": f"<span style='background-color:#1d4ed8; color:white; padding:8px 18px; border-radius:8px; display:inline-block;'>{titulo_env}</span>",
+            "x": 0.5, "y": 0.96, "xanchor": "center", "yanchor": "top",
+            "font": {"size": 28 if not ampliado else 32}
         },
         height=height,
-        margin=dict(l=160, r=90, t=220 if not ampliado else 260, b=90),
+        margin=dict(l=180, r=100, t=160, b=100),
         bargap=0.25,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.07,
-            xanchor="right",
-            x=1,
-            font=dict(size=14)
-        )
+        legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="right", x=1,
+                    font=dict(size=16))
     )
-
     return fig
 
 # =====================
-# PLOT + BOTÃO DOWNLOAD
+# EXPORTAÇÃO
 # =====================
-def plot_card(counter: Counter, titulo: str, key: str):
-    state_key = f"ampliado_{key}"
-    ampliado = st.session_state.get(state_key, False)
+def fig_to_png_bytes(fig: go.Figure, filename: str, width=1920, height=1080, scale=2) -> Tuple[str, bytes]:
+    """Renderiza PNG via kaleido. Se kaleido faltar, avisa e cai para SVG."""
+    try:
+        buf = io.BytesIO()
+        fig.write_image(buf, format="png", width=width, height=height, scale=scale)
+        buf.seek(0)
+        return f"{filename}.png", buf.read()
+    except Exception:
+        st.warning("Para exportação PNG é necessário o pacote **kaleido** (`pip install -U kaleido`). "
+                   "Foi gerado SVG como alternativa.")
+        svg_bytes = fig.to_image(format="svg")
+        return f"{filename}.svg", svg_bytes
+
+def zip_bytes(files: List[Tuple[str, bytes]]) -> bytes:
+    mem = io.BytesIO()
+    with zipfile.ZipFile(mem, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for name, data in files:
+            zf.writestr(name, data)
+    mem.seek(0)
+    return mem.read()
+
+# =====================
+# UI: CARTÃO DO GRÁFICO
+# =====================
+def plot_card(counter: Counter, titulo: str, key: str, exports: Dict[str, bytes]):
+    fig = figura_pareto_horizontal(counter, titulo, largura_rotulo=24, ampliado=False)
 
     config = {
         "displayModeBar": True,
         "scrollZoom": True,
         "responsive": True,
-        "toImageButtonOptions": {
-            "format": "png", "filename": titulo, "height": 1080, "width": 1920, "scale": 2
-        },
+        "toImageButtonOptions": {"format": "png", "filename": titulo, "height": 1080, "width": 1920, "scale": 2},
     }
 
-    fig = figura_pareto_horizontal(counter, titulo, ampliado=ampliado)
-    st.plotly_chart(fig, use_container_width=True, config=config, key=f"plot_{'big_' if ampliado else 'small_'}{key}")
+    st.plotly_chart(fig, use_container_width=True, config=config, key=f"plot_{key}")
 
-    # Exportar imagem e gerar botão de download
-    buffer = BytesIO()
-    fig.write_image(buffer, format="png", width=1920, height=1080, scale=2)
-    buffer.seek(0)
-    b64 = base64.b64encode(buffer.read()).decode()
-    href = f'<a href="data:image/png;base64,{b64}" download="{titulo}.png">📥 Baixar imagem pronta para PowerPoint</a>'
-    st.markdown(href, unsafe_allow_html=True)
+    # Download individual
+    fname, data = fig_to_png_bytes(fig, filename=titulo, width=1920, height=1080, scale=2)
+    exports[fname] = data
+    st.download_button(
+        "⬇️ Baixar este gráfico (PNG)",
+        data=data,
+        file_name=fname,
+        mime="image/png" if fname.endswith(".png") else "image/svg+xml",
+        key=f"dl_{key}"
+    )
 
-    c1, _ = st.columns([1, 6])
-    with c1:
-        if not ampliado:
-            if st.button("Ampliar", key=f"btn_amp_{key}"):
-                st.session_state[state_key] = True
-        else:
-            if st.button("Fechar", key=f"btn_close_{key}"):
-                st.session_state[state_key] = False
+    # Ampliar (compatível com 1.25.0: usa checkbox)
+    expand = st.checkbox("Ampliar", key=f"amp_{key}")
+    if expand:
+        fig_big = figura_pareto_horizontal(counter, titulo, largura_rotulo=26, ampliado=True)
+        st.plotly_chart(fig_big, use_container_width=True, config=config, key=f"plot_big_{key}")
 
 # =====================
 # URL DA PLANILHA
@@ -218,12 +248,19 @@ URL_GOOGLE_SHEETS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSKwCflZovz
 # =====================
 df = carregar_planilha_google_sheets(URL_GOOGLE_SHEETS)
 
+# Toolbar (canto superior direito) – o botão ZIP aparece após gerar os gráficos
+toolbar = st.container()
+
 if df is not None:
     st.success("✅ Planilha carregada com sucesso.")
     st.caption(f"Linhas carregadas: {len(df)}")
 
-    perguntas = df.columns[1:8]
+    perguntas = df.columns[1:8]  # ajuste se precisar
 
+    # onde acumulamos os arquivos exportados
+    exports: Dict[str, bytes] = {}
+
+    # grade 2 x N
     for i in range(0, len(perguntas), 2):
         cols = st.columns(2)
         for j in range(2):
@@ -232,6 +269,24 @@ if df is not None:
                 titulo = f"{i + j + 1}) {remove_prefixo_numerico(col_raw)}"
                 counter = contar_respostas_multipla(df, col_raw)
                 with cols[j]:
-                    plot_card(counter, titulo, key=f"{i}_{j}")
+                    plot_card(counter, titulo, key=f"{i}_{j}", exports=exports)
+
+    # botão ZIP no topo direito
+    if exports:
+        files = list(exports.items())
+        zip_data = zip_bytes(files)
+        with toolbar:
+            c1, c2 = st.columns([6, 1])
+            with c2:
+                st.download_button(
+                    "⬇️ Baixar todas (ZIP)",
+                    data=zip_data,
+                    file_name="graficos_pareto.zip",
+                    mime="application/zip",
+                    key="dl_all_zip",
+                    help="Exporta todos os gráficos em PNG (1920x1080) para uso no PowerPoint."
+                )
+        st.markdown('<p class="tip">Dica: títulos e rótulos foram dimensionados para leitura em sala.</p>',
+                    unsafe_allow_html=True)
 else:
     st.error("❌ Não foi possível carregar os dados da planilha.")
