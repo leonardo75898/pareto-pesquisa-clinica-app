@@ -75,14 +75,9 @@ def contar_respostas_multipla(df: pd.DataFrame, coluna: str) -> Counter:
     return Counter(todas_respostas)
 
 # =====================
-# FIGURA: PARETO HORIZONTAL
+# FIGURA: PARETO HORIZONTAL (PLOTLY – INTERATIVO)
 # =====================
 def figura_pareto_horizontal(counter: Counter, titulo: str, largura_rotulo=24, ampliado=False) -> go.Figure:
-    """
-    Barras HORIZONTAIS (x=frequência), eixo x2 superior para % acumulado.
-    Título em faixa azul (quebra automática se for longo).
-    Compatível com Plotly 5.0.0.
-    """
     fig = go.Figure()
 
     if not counter:
@@ -134,7 +129,7 @@ def figura_pareto_horizontal(counter: Counter, titulo: str, largura_rotulo=24, a
         tickfont=dict(size=16)
     )
 
-    # Eixo X2 (topo) % acumulado  <<< correção: usar title={'text','font'} em vez de titlefont
+    # Eixo X2 (topo) % acumulado
     fig.update_layout(xaxis2=dict(
         title=dict(text="% Acumulado", font=dict(size=20)),
         overlaying="x",
@@ -145,7 +140,7 @@ def figura_pareto_horizontal(counter: Counter, titulo: str, largura_rotulo=24, a
         tickfont=dict(size=16)
     ))
 
-    # Eixo Y (categorias)
+    # Eixo Y
     fig.update_yaxes(
         title_text="",
         automargin=True,
@@ -163,7 +158,7 @@ def figura_pareto_horizontal(counter: Counter, titulo: str, largura_rotulo=24, a
         line=dict(color="gray", width=2, dash="dash")
     )
 
-    # Título com faixa azul (quebra em 2+ linhas se necessário)
+    # Título faixa azul
     titulo_env = wrap_text(titulo, 70)
     fig.update_layout(
         template="plotly_white",
@@ -181,18 +176,72 @@ def figura_pareto_horizontal(counter: Counter, titulo: str, largura_rotulo=24, a
     return fig
 
 # =====================
-# EXPORTAÇÃO
+# EXPORTAÇÃO PNG (ROBUSTA – MATPLOTLIB, SEM KALEIDO)
 # =====================
-def fig_to_png_bytes(fig: go.Figure, filename: str, width=1920, height=1080, scale=2) -> Tuple[str, bytes]:
-    """Renderiza PNG via kaleido. Se kaleido faltar, avisa e evita quebrar a execução."""
-    try:
+def png_from_counter(counter: Counter, titulo: str,
+                     width_px=1920, height_px=1080) -> Tuple[str, bytes]:
+    """Gera PNG estático com Matplotlib (funciona em Streamlit Cloud sem Chrome)."""
+    import matplotlib
+    matplotlib.use("Agg")  # backend offscreen
+    import matplotlib.pyplot as plt
+
+    if not counter:
+        # figura vazia simpática
+        import warnings
+        warnings.filterwarnings("ignore")
+        fig, ax = plt.subplots(figsize=(width_px/100, height_px/100), dpi=100)
+        ax.text(0.5, 0.5, "Sem dados para exibir", ha="center", va="center", fontsize=24)
+        ax.axis("off")
         buf = io.BytesIO()
-        fig.write_image(buf, format="png", width=width, height=height, scale=scale)
+        fig.savefig(buf, format="png", dpi=100)
+        plt.close(fig)
         buf.seek(0)
-        return f"{filename}.png", buf.read()
-    except Exception as e:
-        st.error("Falha ao exportar PNG. Instale o pacote **kaleido** (`pip install -U kaleido`).")
-        raise e
+        return f"{titulo}.png", buf.read()
+
+    labels, valores = zip(*counter.most_common())
+    totais = np.array(valores, dtype=float)
+    p_acum = 100 * np.cumsum(totais) / totais.sum()
+
+    labels_wrapped = [re.sub(r"<br>", "\n", wrap_text(l, 24)) for l in labels]  # quebra em linhas
+
+    fig_w, fig_h = width_px/100, height_px/100
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=100)
+
+    y = np.arange(len(labels))[::-1]  # de cima p/ baixo
+    ax.barh(y, totais, color="#3b82f6")
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels_wrapped, fontsize=16)
+    ax.set_xlabel("Frequência", fontsize=18)
+    ax.tick_params(axis="x", labelsize=16)
+    ax.grid(True, axis="x", linestyle=":", linewidth=0.8, alpha=0.6)
+
+    # eixo superior para % acumulado
+    ax2 = ax.twiny()
+    ax2.plot(p_acum[::-1], y, color="#111827", linewidth=2.5, marker="o")
+    ax2.set_xlim(0, 110)
+    ax2.set_xlabel("% Acumulado", fontsize=18)
+    ax2.tick_params(axis="x", labelsize=16)
+    ax2.axvline(80, color="gray", linestyle="--", linewidth=1.5)
+
+    # alinhar y (já compartilham)
+    ax.invert_yaxis()  # categoria mais frequente no topo
+
+    # espaçamento para o banner do título
+    plt.tight_layout(rect=[0.03, 0.08, 0.97, 0.87])
+
+    # título com “faixa azul”
+    titulo_env = re.sub(r"<br>", " ", wrap_text(titulo, 70))
+    fig.text(
+        0.5, 0.97, titulo_env, ha="center", va="top", color="white",
+        fontsize=28, fontweight="bold",
+        bbox=dict(facecolor="#1d4ed8", boxstyle="round,pad=0.5", edgecolor="none")
+    )
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=100)  # 1920x1080
+    plt.close(fig)
+    buf.seek(0)
+    return f"{titulo}.png", buf.read()
 
 def zip_bytes(files: List[Tuple[str, bytes]]) -> bytes:
     mem = io.BytesIO()
@@ -206,19 +255,18 @@ def zip_bytes(files: List[Tuple[str, bytes]]) -> bytes:
 # UI: CARTÃO DO GRÁFICO
 # =====================
 def plot_card(counter: Counter, titulo: str, key: str, exports: Dict[str, bytes]):
+    # 1) Visualização interativa (Plotly)
     fig = figura_pareto_horizontal(counter, titulo, largura_rotulo=24, ampliado=False)
-
     config = {
         "displayModeBar": True,
         "scrollZoom": True,
         "responsive": True,
         "toImageButtonOptions": {"format": "png", "filename": titulo, "height": 1080, "width": 1920, "scale": 2},
     }
-
     st.plotly_chart(fig, use_container_width=True, config=config, key=f"plot_{key}")
 
-    # Download individual
-    fname, data = fig_to_png_bytes(fig, filename=titulo, width=1920, height=1080, scale=2)
+    # 2) Exportação estável (Matplotlib → PNG)
+    fname, data = png_from_counter(counter, titulo, width_px=1920, height_px=1080)
     exports[fname] = data
     st.download_button(
         "⬇️ Baixar este gráfico (PNG)",
@@ -228,7 +276,7 @@ def plot_card(counter: Counter, titulo: str, key: str, exports: Dict[str, bytes]
         key=f"dl_{key}"
     )
 
-    # Ampliar (compatível com 1.25.0: usa checkbox)
+    # 3) Ampliar (checkbox simples – compatível com Streamlit 1.25)
     expand = st.checkbox("Ampliar", key=f"amp_{key}")
     if expand:
         fig_big = figura_pareto_horizontal(counter, titulo, largura_rotulo=26, ampliado=True)
@@ -252,8 +300,6 @@ if df is not None:
     st.caption(f"Linhas carregadas: {len(df)}")
 
     perguntas = df.columns[1:8]  # ajuste se precisar
-
-    # onde acumulamos os arquivos exportados
     exports: Dict[str, bytes] = {}
 
     # grade 2 x N
