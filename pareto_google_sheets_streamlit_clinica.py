@@ -1,5 +1,6 @@
-# app.py
 import re
+import base64
+from io import BytesIO
 from collections import Counter
 
 import numpy as np
@@ -79,14 +80,14 @@ def figura_pareto_horizontal(counter: Counter, titulo: str, ampliado: bool = Fal
 
     labels_wrapped = [wrap_label(l, 22) for l in labels]
 
-    base_h = 46 * len(labels) + 240
+    base_h = 46 * len(labels) + 260
     height = max(420, base_h)
     if ampliado:
         height = int(height * 1.35)
 
     fig = go.Figure()
 
-    # Barras horizontais (Frequência)
+    # Barras horizontais
     fig.add_trace(go.Bar(
         orientation="h",
         x=list(totais),
@@ -96,13 +97,13 @@ def figura_pareto_horizontal(counter: Counter, titulo: str, ampliado: bool = Fal
         hovertemplate="%{y}<br>Frequência: %{x}<extra></extra>"
     ))
 
-    # Linha de % acumulado (eixo x2 sobreposto)
+    # Linha de % acumulado
     fig.add_trace(go.Scatter(
         x=list(p_acum),
         y=labels_wrapped,
         mode="lines+markers",
         name="% Acumulado",
-        line=dict(color="rgba(17,24,39,1)", width=2),
+        line=dict(color="rgba(17,24,39,1)", width=3),
         xaxis="x2",
         hovertemplate="% Acumulado: %{x:.1f}%<extra></extra>"
     ))
@@ -113,51 +114,68 @@ def figura_pareto_horizontal(counter: Counter, titulo: str, ampliado: bool = Fal
         showgrid=True,
         zeroline=False,
         anchor="y",
-        domain=[0, 1]
+        domain=[0, 1],
+        title_font=dict(size=18),
+        tickfont=dict(size=14)
     )
 
-    # Eixo X2 (topo) % acumulado
+    # Eixo X2 (% acumulado)
     fig.update_layout(xaxis2=dict(
         title="% Acumulado",
         overlaying="x",
         side="top",
         range=[0, 110],
         tickmode="array",
-        tickvals=[0, 20, 40, 60, 80, 100]
+        tickvals=[0, 20, 40, 60, 80, 100],
+        title_font=dict(size=18),
+        tickfont=dict(size=14)
     ))
 
-    # Eixo Y (categorias)
+    # Eixo Y
     fig.update_yaxes(
         title_text="",
         automargin=True,
         categoryorder="array",
         categoryarray=labels_wrapped,
-        autorange="reversed"
+        autorange="reversed",
+        tickfont=dict(size=14)
     )
 
-    # Linha 80% (vertical no x2)
+    # Linha de referência 80%
     fig.add_shape(
         type="line",
         xref="x2", yref="paper",
         x0=80, x1=80, y0=0, y1=1,
-        line=dict(color="gray", width=1, dash="dash")
+        line=dict(color="gray", width=2, dash="dash")
     )
 
-    # Título rebaixado e margem superior maior para não colidir com a modebar
+    # Estilo e título com fundo azul
     fig.update_layout(
         template="plotly_white",
-        title={"text": titulo, "x": 0.5, "y": 0.88, "xanchor": "center", "yanchor": "top",
-               "font": {"size": 26 if not ampliado else 30}},
+        title={
+            "text": f"<span style='background-color:#2563EB; color:white; padding:6px 16px; border-radius:6px'>{titulo}</span>",
+            "x": 0.5, "y": 0.92, "xanchor": "center", "yanchor": "top",
+            "font": {"size": 26 if not ampliado else 30}
+        },
         height=height,
         margin=dict(l=160, r=90, t=220 if not ampliado else 260, b=90),
         bargap=0.25,
-        legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="right", x=1)
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.07,
+            xanchor="right",
+            x=1,
+            font=dict(size=14)
+        )
     )
 
     return fig
 
+# =====================
+# PLOT + BOTÃO DOWNLOAD
+# =====================
 def plot_card(counter: Counter, titulo: str, key: str):
-    """Ampliação inline, sem modal nem experimental_rerun."""
     state_key = f"ampliado_{key}"
     ampliado = st.session_state.get(state_key, False)
 
@@ -166,15 +184,21 @@ def plot_card(counter: Counter, titulo: str, key: str):
         "scrollZoom": True,
         "responsive": True,
         "toImageButtonOptions": {
-            "format": "png", "filename": titulo, "height": 1080, "width": 1920, "scale": 1
+            "format": "png", "filename": titulo, "height": 1080, "width": 1920, "scale": 2
         },
     }
 
-    # Gráfico
     fig = figura_pareto_horizontal(counter, titulo, ampliado=ampliado)
     st.plotly_chart(fig, use_container_width=True, config=config, key=f"plot_{'big_' if ampliado else 'small_'}{key}")
 
-    # Controles
+    # Exportar imagem e gerar botão de download
+    buffer = BytesIO()
+    fig.write_image(buffer, format="png", width=1920, height=1080, scale=2)
+    buffer.seek(0)
+    b64 = base64.b64encode(buffer.read()).decode()
+    href = f'<a href="data:image/png;base64,{b64}" download="{titulo}.png">📥 Baixar imagem pronta para PowerPoint</a>'
+    st.markdown(href, unsafe_allow_html=True)
+
     c1, _ = st.columns([1, 6])
     with c1:
         if not ampliado:
