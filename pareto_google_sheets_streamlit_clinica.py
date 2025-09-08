@@ -80,7 +80,7 @@ def contar_respostas_multipla(df: pd.DataFrame, coluna: str) -> Counter:
 def figura_pareto_horizontal(counter: Counter, titulo: str, largura_rotulo=24, ampliado=False) -> go.Figure:
     """
     Barras HORIZONTAIS (x=frequência), eixo x2 superior para % acumulado.
-    Título em faixa azul que “acompanha” a largura visual do gráfico.
+    Título em faixa azul (quebra automática se for longo).
     Compatível com Plotly 5.0.0.
     """
     fig = go.Figure()
@@ -134,16 +134,14 @@ def figura_pareto_horizontal(counter: Counter, titulo: str, largura_rotulo=24, a
         tickfont=dict(size=16)
     )
 
-    # Eixo X2 (topo) % acumulado
-    # (em Plotly 5.0 é via update_layout(xaxis2=...))
+    # Eixo X2 (topo) % acumulado  <<< correção: usar title={'text','font'} em vez de titlefont
     fig.update_layout(xaxis2=dict(
-        title="% Acumulado",
+        title=dict(text="% Acumulado", font=dict(size=20)),
         overlaying="x",
         side="top",
         range=[0, 110],
         tickmode="array",
         tickvals=[0, 20, 40, 60, 80, 100],
-        titlefont=dict(size=20),   # sintaxe antiga compatível
         tickfont=dict(size=16)
     ))
 
@@ -157,7 +155,7 @@ def figura_pareto_horizontal(counter: Counter, titulo: str, largura_rotulo=24, a
         tickfont=dict(size=16)
     )
 
-    # Linha 80% (vertical no x2) – em 5.0 usamos shape
+    # Linha 80% (vertical no x2)
     fig.add_shape(
         type="line",
         xref="x2", yref="paper",
@@ -165,7 +163,7 @@ def figura_pareto_horizontal(counter: Counter, titulo: str, largura_rotulo=24, a
         line=dict(color="gray", width=2, dash="dash")
     )
 
-    # Título com faixa azul (que pode quebrar em 2+ linhas)
+    # Título com faixa azul (quebra em 2+ linhas se necessário)
     titulo_env = wrap_text(titulo, 70)
     fig.update_layout(
         template="plotly_white",
@@ -186,17 +184,15 @@ def figura_pareto_horizontal(counter: Counter, titulo: str, largura_rotulo=24, a
 # EXPORTAÇÃO
 # =====================
 def fig_to_png_bytes(fig: go.Figure, filename: str, width=1920, height=1080, scale=2) -> Tuple[str, bytes]:
-    """Renderiza PNG via kaleido. Se kaleido faltar, avisa e cai para SVG."""
+    """Renderiza PNG via kaleido. Se kaleido faltar, avisa e evita quebrar a execução."""
     try:
         buf = io.BytesIO()
         fig.write_image(buf, format="png", width=width, height=height, scale=scale)
         buf.seek(0)
         return f"{filename}.png", buf.read()
-    except Exception:
-        st.warning("Para exportação PNG é necessário o pacote **kaleido** (`pip install -U kaleido`). "
-                   "Foi gerado SVG como alternativa.")
-        svg_bytes = fig.to_image(format="svg")
-        return f"{filename}.svg", svg_bytes
+    except Exception as e:
+        st.error("Falha ao exportar PNG. Instale o pacote **kaleido** (`pip install -U kaleido`).")
+        raise e
 
 def zip_bytes(files: List[Tuple[str, bytes]]) -> bytes:
     mem = io.BytesIO()
@@ -228,7 +224,7 @@ def plot_card(counter: Counter, titulo: str, key: str, exports: Dict[str, bytes]
         "⬇️ Baixar este gráfico (PNG)",
         data=data,
         file_name=fname,
-        mime="image/png" if fname.endswith(".png") else "image/svg+xml",
+        mime="image/png",
         key=f"dl_{key}"
     )
 
